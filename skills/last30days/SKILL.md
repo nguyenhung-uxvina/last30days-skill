@@ -687,8 +687,17 @@ Known keyword-trap classes and how to handle each:
   4. **X/Twitter and YouTube are the highest-value missing sources for non-English topics.** Surface this clearly in the output so the user knows what would unlock deeper coverage.
 - Do NOT skip this class check for mixed-script queries (e.g. "קפה עלית Elite Coffee") - if any non-Latin characters are present, Class 5 applies.
 
+**Class 5b: Vietnamese topic (Latin script with diacritics)**
+- Pattern: topic contains Vietnamese-distinctive letters (đ ơ ư ă or tone-marked vowels ạ..ỹ, e.g. "xuồng không người lái", "cầu phao quân sự"). Vietnamese is Latin-script, so it does NOT match Class 5's non-Latin check - treat it as its own class.
+- Why it needs intervention: Reddit/HN/GitHub are English-dominant, but Vietnamese YouTube is a rich ecosystem and Vietnamese web media (VnExpress, Tinhte, Voz, Spiderum, GenK, Tuoi Tre, Thanh Nien) is well indexed. The engine auto-detects Vietnamese and elevates YouTube + web in its deterministic fallback, but the hosting model's --plan should do the same.
+- Action for the hosting model:
+  1. **Keep the Vietnamese phrasing in search_query** - do not translate; Vietnamese content is titled in Vietnamese.
+  2. **Add ONE English-alias subquery at weight 0.5-0.6** when the topic has an international identity (a product, company, or global topic) so English coverage isn't lost.
+  3. **Route primary sources to youtube + grounding first**, then reddit/x. Skip generic subreddits; r/VietNam and r/TroChuyenLinhTinh are the only broadly useful ones and only for social topics.
+  4. **Note in the Resolved block:** "Vietnamese topic detected. YouTube + web elevated; keeping Vietnamese phrasing (+ English alias subquery)."
+
 **Pre-Flight decision flow (do this BEFORE any WebSearch):**
-1. Read the topic. Match against Classes 1-5 above.
+1. Read the topic. Match against Classes 1-5 and 5b above.
 2. If the topic matches a class, ALWAYS emit a visible pre-flight note before the Resolved block:
    - `Pre-Flight: topic matches {Class N} ({class name}). {Action: clarifying question / reframe / specificity ask}.`
 3. If the action is a clarifying question, STOP after emitting it. Wait for the user response before any engine work.

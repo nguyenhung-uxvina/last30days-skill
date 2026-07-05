@@ -547,5 +547,46 @@ class ContextAnchorTests(unittest.TestCase):
         self.assertNotIn("orchestrator", primary.search_query)
 
 
+class VietnameseDetectionTests(unittest.TestCase):
+    """Vietnamese is Latin-script, so it previously slipped past non-Latin
+    detection and ran with English-dominant source defaults."""
+
+    def test_detects_vietnamese_distinctive_letters(self):
+        self.assertEqual(planner.detect_language("xuồng không người lái"), "vi")
+        self.assertEqual(planner.detect_language("Trường Sa"), "vi")
+        self.assertEqual(planner.detect_language("cầu phao quân sự"), "vi")
+
+    def test_plain_english_is_none(self):
+        self.assertIsNone(planner.detect_language("AI agent harness"))
+
+    def test_french_accents_not_vietnamese(self):
+        # â/ê/ô/é alone are shared with French — must not match.
+        self.assertIsNone(planner.detect_language("café crème brûlée"))
+
+    def test_hebrew_still_detected(self):
+        self.assertEqual(planner.detect_language("קפה עלית"), "he")
+
+    def test_vietnamese_fallback_elevates_youtube_and_grounding(self):
+        plan = planner._fallback_plan(
+            "cầu phao quân sự",
+            ["reddit", "hackernews", "youtube", "grounding"],
+            None,
+            "default",
+        )
+        primary = plan.subqueries[0]
+        # YouTube and web (grounding) lead the source list for vi topics.
+        self.assertEqual(primary.sources[:2], ["youtube", "grounding"])
+
+    def test_english_fallback_source_order_unchanged(self):
+        plan = planner._fallback_plan(
+            "military pontoon bridge",
+            ["reddit", "hackernews", "youtube", "grounding"],
+            None,
+            "default",
+        )
+        primary = plan.subqueries[0]
+        self.assertNotEqual(primary.sources[:2], ["youtube", "grounding"])
+
+
 if __name__ == "__main__":
     unittest.main()

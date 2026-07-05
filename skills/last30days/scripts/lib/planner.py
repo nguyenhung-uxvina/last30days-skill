@@ -10,11 +10,20 @@ from . import http, providers, query, schema
 
 # Hebrew Unicode block: U+0590–U+05FF
 _HEBREW_RE = re.compile(r'[\u0590-\u05FF]')
+# Vietnamese is Latin-script, so it slips past non-Latin detection, but its
+# alphabet has distinctive letters (\u0111 \u01A1 \u01B0 \u0103) plus the Latin Extended
+# Additional tone-marked vowels (\u1EA1..\u1EF9, U+1EA0-U+1EF9). \u00E2/\u00EA/\u00F4 alone are shared
+# with French/Portuguese and are deliberately NOT sufficient to match.
+_VIETNAMESE_RE = re.compile(r'[\u0111\u01A1\u01B0\u0103\u0110\u01A0\u01AF\u0102\u1EA0-\u1EF9]')
 
 
 def detect_language(text: str) -> str | None:
-    """Return 'he' if the text contains Hebrew characters, else None."""
-    return 'he' if _HEBREW_RE.search(text) else None
+    """Best-effort script-based language tag: 'he', 'vi', or None."""
+    if _HEBREW_RE.search(text):
+        return 'he'
+    if _VIETNAMESE_RE.search(text):
+        return 'vi'
+    return None
 
 ALLOWED_INTENTS = {
     "factual",
@@ -439,11 +448,25 @@ def _fallback_plan(
     # Hebrew-language topics: elevate web search (grounding) to the front of
     # the source list since Reddit/HN/GitHub are English-dominant platforms.
     # Grounding covers Ynet, Walla, Mako, N12 etc. if a web search key is set.
-    if detect_language(topic) == 'he' and 'grounding' in available_sources:
+    lang = detect_language(topic)
+    if lang == 'he' and 'grounding' in available_sources:
         ordered = ['grounding'] + [s for s in available_sources if s != 'grounding']
         available_sources = ordered
         if requested_sources:
             requested_sources = ['grounding'] + [s for s in requested_sources if s != 'grounding']
+    elif lang == 'vi':
+        # Vietnamese: Reddit/HN/GitHub are English-dominant, but Vietnamese
+        # YouTube is a rich ecosystem and web search reaches VnExpress /
+        # Tinhte / Voz / Spiderum / GenK. Elevate both to the front.
+        boost = [s for s in ('youtube', 'grounding') if s in available_sources]
+        if boost:
+            available_sources = boost + [
+                s for s in available_sources if s not in boost
+            ]
+            if requested_sources:
+                requested_sources = [
+                    s for s in boost if s in requested_sources
+                ] + [s for s in requested_sources if s not in boost]
     allowed_sources = requested_sources or available_sources
     source_weights = _default_source_weights(intent, allowed_sources)
     core = query.extract_core_subject(topic, max_words=6, strip_suffixes=True)
