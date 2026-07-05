@@ -268,8 +268,10 @@ class TestDiggAutoInstall:
         # The wizard now also best-effort-installs the additional default-on
         # Printing Press sources (arxiv/techmeme/trustpilot), so digg is one of
         # several install calls rather than the only one.
+        # The resolved npx path (not the bare name) must be used: on Windows
+        # `npx` is `npx.cmd`, which CreateProcess cannot resolve by bare name.
         mock_subproc.assert_any_call(
-            ["npx", "-y", setup_wizard.PRINTING_PRESS_NPM, "install", "digg", "--cli-only"],
+            ["/opt/homebrew/bin/npx", "-y", setup_wizard.PRINTING_PRESS_NPM, "install", "digg", "--cli-only"],
             capture_output=True, text=True, timeout=setup_wizard.DIGG_INSTALL_TIMEOUT,
         )
         assert results["digg_installed"] is True

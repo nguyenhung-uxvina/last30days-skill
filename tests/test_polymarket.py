@@ -619,5 +619,55 @@ def test_per_item_relevance_floor_no_drops_when_all_high():
     filtered = [i for i in items if i["relevance"] >= 0.10]
     assert len(filtered) == 3
 
+
+class TestEndpointCircuitBreaker:
+    """Connection-level failures trip the breaker; HTTP-status errors don't.
+
+    Regression: a refused connection (blocked network) cost 6 (query, page)
+    calls x 3 attempts each against a dead host (2026-07-05 field report).
+    """
+
+    def setup_method(self):
+        polymarket._ENDPOINT_DOWN.clear()
+
+    def teardown_method(self):
+        polymarket._ENDPOINT_DOWN.clear()
+
+    def test_url_error_trips_breaker_and_skips_next_call(self):
+        with patch.object(
+            polymarket.http, "request",
+            side_effect=polymarket.http.HTTPError(
+                "URL Error: [WinError 10061] No connection could be made"
+            ),
+        ) as mock_req:
+            first = polymarket._search_single_query("topic", 1)
+            second = polymarket._search_single_query("topic", 2)
+
+        assert "URL Error" in first["error"]
+        assert polymarket._ENDPOINT_DOWN.is_set()
+        assert second["error"] == "skipped: Gamma endpoint unreachable"
+        assert mock_req.call_count == 1  # second call never hit the network
+
+    def test_http_status_error_does_not_trip_breaker(self):
+        with patch.object(
+            polymarket.http, "request",
+            side_effect=polymarket.http.HTTPError("HTTP 500: Server Error", 500),
+        ) as mock_req:
+            polymarket._search_single_query("topic", 1)
+            polymarket._search_single_query("topic", 2)
+
+        assert not polymarket._ENDPOINT_DOWN.is_set()
+        assert mock_req.call_count == 2  # both calls attempted
+
+    def test_success_path_unaffected(self):
+        with patch.object(
+            polymarket.http, "request",
+            return_value={"events": [{"id": "e1"}]},
+        ):
+            result = polymarket._search_single_query("topic", 1)
+        assert result["events"] == [{"id": "e1"}]
+        assert not polymarket._ENDPOINT_DOWN.is_set()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -8,6 +8,7 @@ import json
 import math
 import re
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus, urlencode
@@ -314,8 +315,21 @@ def _infer_query_intent(topic: str) -> str:
     return "breaking_news"
 
 
+# Circuit breaker: once one request fails at the connection level (refused,
+# DNS failure, connect timeout — surfaced by http.py as "URL Error: ..."),
+# the Gamma endpoint is unreachable for this process (blocked network,
+# firewall) and every further (query, page) call just burns timeout*retries
+# seconds against a dead host. Observed 2026-07-05: 6 calls x 3 attempts
+# each against a refused connection. HTTP-status errors (4xx/5xx) do NOT
+# trip the breaker — the endpoint is alive, the query merely failed.
+_ENDPOINT_DOWN = threading.Event()
+
+
 def _search_single_query(query: str, page: int = 1) -> Dict[str, Any]:
     """Run a single search query against Gamma API."""
+    if _ENDPOINT_DOWN.is_set():
+        return {"events": [], "error": "skipped: Gamma endpoint unreachable"}
+
     params = {
         "q": query,
         "page": str(page),
@@ -328,6 +342,12 @@ def _search_single_query(query: str, page: int = 1) -> Dict[str, Any]:
         response = http.request("GET", url, timeout=15, retries=2)
         return response
     except http.HTTPError as e:
+        if str(e).startswith("URL Error:") and not _ENDPOINT_DOWN.is_set():
+            _ENDPOINT_DOWN.set()
+            _log(
+                "Gamma endpoint unreachable (connection-level failure); "
+                "skipping remaining Polymarket queries this run"
+            )
         _log(f"Search failed for '{query}' page {page}: {e}")
         return {"events": [], "error": str(e)}
     except Exception as e:

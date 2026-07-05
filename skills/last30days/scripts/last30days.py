@@ -502,10 +502,16 @@ def subrun_kwargs_for(
         x_handle = x_handle.lstrip("@") or None
 
     subreddits = _choose("subreddits", "subreddits")
+    if isinstance(subreddits, str):
+        # Tolerate a comma-separated string; a bare string must never reach the
+        # pipeline, where iterating it yields single characters.
+        subreddits = [s for s in subreddits.split(",")]
     if isinstance(subreddits, list):
         subreddits = [s.strip().removeprefix("r/") for s in subreddits if s.strip()] or None
 
     x_related = plan_entry.get("x_related")
+    if isinstance(x_related, str):
+        x_related = [h for h in x_related.split(",")]
     if isinstance(x_related, list):
         x_related = [h.strip().lstrip("@") for h in x_related if h.strip()] or None
     else:
@@ -516,6 +522,11 @@ def subrun_kwargs_for(
         github_user = github_user.lstrip("@").lower() or None
 
     github_repos = _choose("github_repos", "github_repos")
+    if isinstance(github_repos, str):
+        # A plan entry like "github_repos": "owner/repo" (string, not list) was
+        # previously passed through verbatim and char-iterated downstream,
+        # producing one GitHub API call per character. Coerce to a list.
+        github_repos = [r for r in github_repos.split(",")]
     if isinstance(github_repos, list):
         github_repos = [r.strip() for r in github_repos if r.strip() and "/" in r.strip()] or None
 

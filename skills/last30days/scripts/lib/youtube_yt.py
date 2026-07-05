@@ -14,6 +14,7 @@ import shlex
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -84,6 +85,40 @@ _NO_CAPTION_RE = re.compile(
     r"no subtitles|requested (format|language)|there'?s no .*subtitles",
     re.IGNORECASE,
 )
+
+# Run-level rate-limit degradation: once _RATE_LIMIT_STRIKE_LIMIT consecutive
+# videos exhaust their retries on a 429-class error, YouTube is throttling
+# this IP for the rest of the run — further per-video retries just burn
+# backoff seconds against the same limiter (observed 2026-07-05: every video
+# in a comparison run retried 3x into the same 429). Remaining fetches
+# collapse to a single fast attempt. A success resets the strikes.
+_RATE_LIMITED_RE = re.compile(
+    r"429|too many requests|rate.?limit|not a bot|sign in to confirm",
+    re.IGNORECASE,
+)
+_RATE_LIMIT_STRIKE_LIMIT = 2
+_rate_limit_lock = threading.Lock()
+_rate_limit_strikes = 0
+
+
+def _rate_limit_degraded() -> bool:
+    with _rate_limit_lock:
+        return _rate_limit_strikes >= _RATE_LIMIT_STRIKE_LIMIT
+
+
+def _record_rate_limit_outcome(last_reason: "Optional[str]", success: bool) -> None:
+    """Track consecutive 429-class final failures; reset on any success."""
+    global _rate_limit_strikes
+    with _rate_limit_lock:
+        if success:
+            _rate_limit_strikes = 0
+        elif last_reason and _RATE_LIMITED_RE.search(last_reason):
+            _rate_limit_strikes += 1
+            if _rate_limit_strikes == _RATE_LIMIT_STRIKE_LIMIT:
+                _log(
+                    "YouTube transcript rate limiting detected; remaining "
+                    "fetches drop to a single fast attempt this run"
+                )
 
 
 def extract_transcript_highlights(transcript: str, topic: str, limit: int = 5) -> list[str]:
@@ -651,8 +686,11 @@ def _fetch_transcript_ytdlp(
         f"https://www.youtube.com/watch?v={video_id}",
     ]
 
-    timeout = _TRANSCRIPT_FAST_TIMEOUT if fast_fail else _TRANSCRIPT_TIMEOUT
-    attempts = 1 if fast_fail else _TRANSCRIPT_MAX_RETRIES + 1
+    # Once the run-level 429 breaker trips, behave like fast_fail even on the
+    # keyless path: one short attempt, no retries into the same limiter.
+    degraded = fast_fail or _rate_limit_degraded()
+    timeout = _TRANSCRIPT_FAST_TIMEOUT if degraded else _TRANSCRIPT_TIMEOUT
+    attempts = 1 if degraded else _TRANSCRIPT_MAX_RETRIES + 1
     last_reason: Optional[str] = None
     for attempt in range(attempts):
         try:
@@ -672,6 +710,8 @@ def _fetch_transcript_ytdlp(
             return None
 
         if result.returncode == 0:
+            # YouTube served the request — clear any rate-limit strikes.
+            _record_rate_limit_outcome(None, success=True)
             vtt = _read_vtt(video_id, temp_dir)
             if vtt is not None:
                 return vtt
@@ -689,6 +729,7 @@ def _fetch_transcript_ytdlp(
         # runs reported when every video had captions.
         partial_vtt = _read_vtt(video_id, temp_dir)
         if partial_vtt is not None:
+            _record_rate_limit_outcome(None, success=True)
             return partial_vtt
 
         # Non-zero exit == a real error worth classifying & surfacing.
@@ -710,6 +751,7 @@ def _fetch_transcript_ytdlp(
              f"(exit {result.returncode}): {snippet}")
         break
 
+    _record_rate_limit_outcome(last_reason, success=False)
     if status is not None and last_reason is not None:
         status["ytdlp_error"] = last_reason
     return None

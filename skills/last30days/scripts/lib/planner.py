@@ -119,6 +119,7 @@ def plan_query(
             requested_sources,
             depth,
             note="deterministic-comparison-plan",
+            context=context,
         )
     prompt = _build_prompt(topic, available_sources, requested_sources, depth)
     if context:
@@ -135,6 +136,7 @@ def plan_query(
             return _fallback_plan(
                 topic, available_sources, requested_sources, depth,
                 note=f"fallback-plan (LLM error: {type(exc).__name__})",
+                context=context,
             )
     # No --plan was passed and no engine-internal provider is configured.
     # The deterministic fallback path produces weaker plans than either the
@@ -156,7 +158,9 @@ def plan_query(
             "See LAW 7 in SKILL.md and Step 0.75 for the plan schema.",
             file=sys.stderr,
         )
-    return _fallback_plan(topic, available_sources, requested_sources, depth)
+    return _fallback_plan(
+        topic, available_sources, requested_sources, depth, context=context
+    )
 
 
 def _build_prompt(
@@ -389,12 +393,47 @@ def _trim_subqueries_for_depth(
     return trimmed
 
 
+_CONTEXT_ANCHOR_STOPWORDS = frozenset(
+    "a an the by of for and or in on at to with is are was were has have "
+    "launched released built created its their".split()
+)
+
+
+def _context_anchor(topic: str, context: str, max_words: int = 3) -> str:
+    """Derive a short disambiguating anchor from resolved entity context.
+
+    Single-word topics ("paperclip", "hermes") are the highest-collision
+    deterministic queries — bare, they retrieve homonym noise (a "paperclip"
+    search returns stationery and swords-forged-from-paperclips, not the
+    agent orchestrator; 2026-07-05 field report). When the caller supplied
+    entity context (competitors plan / auto-resolve), borrow its first few
+    content words as an unquoted search anchor. Multi-word topics already
+    self-disambiguate and get no anchor.
+    """
+    if not context or len(topic.split()) > 1:
+        return ""
+    topic_words = {w.lower() for w in re.findall(r"[A-Za-z0-9-]+", topic)}
+    # Drop any leading "<Entity ...>:" label, then keep the first clause.
+    text = re.sub(r"^[^:]{0,60}:\s*", "", context.strip())
+    clause = re.split(r"[,.;\n]", text, 1)[0]
+    words: list[str] = []
+    for w in re.findall(r"[A-Za-z0-9-]+", clause):
+        lw = w.lower()
+        if lw in _CONTEXT_ANCHOR_STOPWORDS or lw in topic_words:
+            continue
+        words.append(w)
+        if len(words) >= max_words:
+            break
+    return " ".join(words)
+
+
 def _fallback_plan(
     topic: str,
     available_sources: list[str],
     requested_sources: list[str] | None,
     depth: str,
     note: str = "fallback-plan",
+    context: str = "",
 ) -> schema.QueryPlan:
     intent = _infer_intent(topic)
     # Hebrew-language topics: elevate web search (grounding) to the front of
@@ -409,6 +448,9 @@ def _fallback_plan(
     source_weights = _default_source_weights(intent, allowed_sources)
     core = query.extract_core_subject(topic, max_words=6, strip_suffixes=True)
     base_search = _keyword_query(topic, core)
+    anchor = _context_anchor(topic, context)
+    if anchor:
+        base_search = f"{base_search} {anchor}"
     base_ranking = _ranking_query(topic, core)
 
     subqueries = [schema.SubQuery(

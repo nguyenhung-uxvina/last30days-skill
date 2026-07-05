@@ -1069,5 +1069,37 @@ class TestYoutubeCommentsGating(unittest.TestCase):
         ))
 
 
+class TestTranscriptRateLimitBreaker(unittest.TestCase):
+    """Run-level 429 degradation: consecutive rate-limited videos collapse
+    remaining fetches to a single fast attempt (2026-07-05 field report:
+    every video in a comparison run retried 3x into the same 429)."""
+
+    def setUp(self):
+        youtube_yt._rate_limit_strikes = 0
+
+    def tearDown(self):
+        youtube_yt._rate_limit_strikes = 0
+
+    def test_not_degraded_below_strike_limit(self):
+        youtube_yt._record_rate_limit_outcome("HTTP Error 429", success=False)
+        self.assertFalse(youtube_yt._rate_limit_degraded())
+
+    def test_degraded_at_strike_limit(self):
+        youtube_yt._record_rate_limit_outcome("HTTP Error 429", success=False)
+        youtube_yt._record_rate_limit_outcome("Too Many Requests", success=False)
+        self.assertTrue(youtube_yt._rate_limit_degraded())
+
+    def test_success_resets_strikes(self):
+        youtube_yt._record_rate_limit_outcome("HTTP Error 429", success=False)
+        youtube_yt._record_rate_limit_outcome(None, success=True)
+        youtube_yt._record_rate_limit_outcome("HTTP Error 429", success=False)
+        self.assertFalse(youtube_yt._rate_limit_degraded())
+
+    def test_non_rate_limit_failure_no_strike(self):
+        youtube_yt._record_rate_limit_outcome("read error", success=False)
+        youtube_yt._record_rate_limit_outcome("connection reset", success=False)
+        self.assertFalse(youtube_yt._rate_limit_degraded())
+
+
 if __name__ == "__main__":
     unittest.main()

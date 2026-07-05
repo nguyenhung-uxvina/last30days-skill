@@ -496,5 +496,56 @@ class FallbackDefaultsTests(unittest.TestCase):
         self.assertIn("LLM planning failed", output)
         self.assertNotIn("No --plan passed", output)
 
+
+class ContextAnchorTests(unittest.TestCase):
+    """Single-word fallback queries get a disambiguating anchor from entity
+    context. Regression: bare "paperclip" retrieved stationery/sword-forging
+    noise in a competitor sub-run whose plan entry carried full context
+    (2026-07-05 field report)."""
+
+    def test_single_word_topic_gets_anchor(self):
+        anchor = planner._context_anchor(
+            "paperclip",
+            "Paperclip: multi-agent orchestrator, a company of agents, "
+            "launched March 2026",
+        )
+        self.assertEqual(anchor, "multi-agent orchestrator")
+
+    def test_multi_word_topic_gets_no_anchor(self):
+        anchor = planner._context_anchor(
+            "Hermes Agent", "Hermes Agent: self-improving agent runtime"
+        )
+        self.assertEqual(anchor, "")
+
+    def test_no_context_no_anchor(self):
+        self.assertEqual(planner._context_anchor("paperclip", ""), "")
+
+    def test_anchor_skips_stopwords_and_topic_echo(self):
+        anchor = planner._context_anchor(
+            "hermes",
+            "Hermes Agent by Nous Research: self-improving self-hosted AI "
+            "agent runtime on a VPS",
+        )
+        self.assertEqual(anchor, "self-improving self-hosted AI")
+
+    def test_fallback_plan_search_query_carries_anchor(self):
+        plan = planner._fallback_plan(
+            "paperclip",
+            ["reddit", "youtube"],
+            None,
+            "default",
+            context="Paperclip: multi-agent orchestrator, a company of agents",
+        )
+        primary = plan.subqueries[0]
+        self.assertIn("multi-agent orchestrator", primary.search_query)
+
+    def test_fallback_plan_without_context_unchanged(self):
+        plan = planner._fallback_plan(
+            "paperclip", ["reddit", "youtube"], None, "default"
+        )
+        primary = plan.subqueries[0]
+        self.assertNotIn("orchestrator", primary.search_query)
+
+
 if __name__ == "__main__":
     unittest.main()

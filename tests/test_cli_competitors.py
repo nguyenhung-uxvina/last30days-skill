@@ -126,5 +126,64 @@ class CompetitorsCliTests(unittest.TestCase):
             cli.resolve_competitors_args(args)
         self.assertEqual(cm.exception.code, 2)
 
+
+class TestSubrunKwargsStringCoercion(unittest.TestCase):
+    """Plan entries with string values must never char-iterate downstream.
+
+    Regression: "github_repos": "owner/repo" (string, not list) passed through
+    verbatim and pipeline.run() iterated it character by character, firing one
+    GitHub API call per character (2026-07-05 field report).
+    """
+
+    def test_github_repos_string_coerced_to_list(self):
+        kwargs = cli.subrun_kwargs_for(
+            "Hermes",
+            {"github_repos": "nousresearch/hermes-agent"},
+            resolved={},
+        )
+        self.assertEqual(kwargs["github_repos"], ["nousresearch/hermes-agent"])
+
+    def test_github_repos_comma_string_splits(self):
+        kwargs = cli.subrun_kwargs_for(
+            "Hermes",
+            {"github_repos": "a/b, c/d"},
+            resolved={},
+        )
+        self.assertEqual(kwargs["github_repos"], ["a/b", "c/d"])
+
+    def test_github_repos_string_without_slash_dropped(self):
+        kwargs = cli.subrun_kwargs_for(
+            "Hermes",
+            {"github_repos": "not-a-repo"},
+            resolved={},
+        )
+        self.assertIsNone(kwargs["github_repos"])
+
+    def test_subreddits_string_coerced_to_list(self):
+        kwargs = cli.subrun_kwargs_for(
+            "Hermes",
+            {"subreddits": "LocalLLaMA, r/AI_Agents"},
+            resolved={},
+        )
+        self.assertEqual(kwargs["subreddits"], ["LocalLLaMA", "AI_Agents"])
+
+    def test_x_related_string_coerced_to_list(self):
+        kwargs = cli.subrun_kwargs_for(
+            "Hermes",
+            {"x_related": "@NousResearch, hwchase17"},
+            resolved={},
+        )
+        self.assertEqual(kwargs["x_related"], ["NousResearch", "hwchase17"])
+
+    def test_list_inputs_unchanged(self):
+        kwargs = cli.subrun_kwargs_for(
+            "Hermes",
+            {"github_repos": ["a/b"], "subreddits": ["LocalLLaMA"]},
+            resolved={},
+        )
+        self.assertEqual(kwargs["github_repos"], ["a/b"])
+        self.assertEqual(kwargs["subreddits"], ["LocalLLaMA"])
+
+
 if __name__ == "__main__":
     unittest.main()

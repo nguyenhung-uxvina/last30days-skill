@@ -460,13 +460,17 @@ class TestClipboardDeviceAuth:
     @patch("webbrowser.open")
     @patch("subprocess.run")
     def test_no_pbcopy_on_linux(self, mock_subproc, mock_browser, mock_poll, mock_start):
-        """On Linux, subprocess.run (pbcopy) is not called."""
+        """On Linux, pbcopy is never called; wl-copy/xclip are attempted instead
+        (clipboard support went cross-platform: clip.exe on Windows, wl-copy
+        then xclip on Linux)."""
         mock_start.return_value = ("dev123", "CLIP-CODE", "https://github.com/login/device", 5)
 
         with patch("sys.platform", "linux"):
             setup_wizard.run_full_device_auth(timeout=1)
 
-        mock_subproc.assert_not_called()
+        called_cmds = [c.args[0] for c in mock_subproc.call_args_list]
+        assert ["pbcopy"] not in called_cmds
+        assert ["wl-copy"] in called_cmds  # first Linux candidate attempted
 
     @patch("lib.setup_wizard.run_device_auth")
     @patch("lib.setup_wizard.poll_device_auth", return_value=None)

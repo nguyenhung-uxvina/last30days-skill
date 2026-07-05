@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -247,11 +248,15 @@ def _install_digg_cli() -> Tuple[bool, str, str, str]:
     off_path = _digg_off_path_binary()
     if off_path:
         return False, "installed_off_path", "", off_path
-    if shutil.which("npx") is None:
+    npx = shutil.which("npx")
+    if npx is None:
         return False, "no_npx", "", ""
     try:
+        # Use the resolved path, not the bare name: on Windows `npx` is
+        # `npx.cmd`, which CreateProcess cannot resolve by bare name
+        # (WinError 2) even though shutil.which finds it via PATHEXT.
         proc = subprocess.run(
-            ["npx", "-y", PRINTING_PRESS_NPM, "install", "digg", "--cli-only"],
+            [npx, "-y", PRINTING_PRESS_NPM, "install", "digg", "--cli-only"],
             capture_output=True, text=True, timeout=DIGG_INSTALL_TIMEOUT,
         )
     except Exception as exc:
@@ -328,11 +333,13 @@ def _install_pp_cli(slug: str, bin_name: str) -> Tuple[bool, str, str, str]:
     off_path = _pp_off_path_binary(bin_name)
     if off_path:
         return False, "installed_off_path", "", off_path
-    if shutil.which("npx") is None:
+    npx = shutil.which("npx")
+    if npx is None:
         return False, "no_npx", "", ""
     try:
+        # Resolved path, not bare name — see _install_digg_cli (Windows npx.cmd).
         proc = subprocess.run(
-            ["npx", "-y", PRINTING_PRESS_NPM, "install", slug, "--cli-only"],
+            [npx, "-y", PRINTING_PRESS_NPM, "install", slug, "--cli-only"],
             capture_output=True, text=True, timeout=DIGG_INSTALL_TIMEOUT,
         )
     except Exception as exc:
@@ -875,6 +882,29 @@ def _device_handle_path() -> Path:
     return Path(tempfile.gettempdir()) / "last30days-github-device-handle.json"
 
 
+def _copy_to_clipboard(text: str) -> bool:
+    """Best-effort cross-platform clipboard copy. Never raises.
+
+    macOS: pbcopy. Windows: clip.exe (previously unsupported — the device
+    code claimed "clipboard copy failed" on every Windows run). Linux:
+    wl-copy, then xclip.
+    """
+    candidates: list[list[str]]
+    if sys.platform == "darwin":
+        candidates = [["pbcopy"]]
+    elif sys.platform == "win32":
+        candidates = [["clip"]]
+    else:
+        candidates = [["wl-copy"], ["xclip", "-selection", "clipboard"]]
+    for cmd in candidates:
+        try:
+            subprocess.run(cmd, input=text.encode(), check=True, timeout=5)
+            return True
+        except Exception:
+            continue  # binary missing or copy failed; try the next candidate
+    return False
+
+
 def _start_device_flow() -> "Tuple[Dict[str, Any], Optional[Dict[str, Any]]]":
     """Submit the GitHub device flow and surface the code, without polling.
 
@@ -935,13 +965,7 @@ def _start_device_flow() -> "Tuple[Dict[str, Any], Optional[Dict[str, Any]]]":
     )
 
     # Copy the code to the clipboard BEFORE opening the browser.
-    clipboard_ok = False
-    if sys.platform == "darwin":
-        try:
-            subprocess.run(["pbcopy"], input=user_code.encode(), check=True, timeout=5)
-            clipboard_ok = True
-        except Exception:
-            pass  # pbcopy unavailable or failed, fall through
+    clipboard_ok = _copy_to_clipboard(user_code)
 
     # Print the code as a plain HUMAN line on stdout too, so a foreground caller
     # sees it in the returned output even without reading the JSON. The clipboard
